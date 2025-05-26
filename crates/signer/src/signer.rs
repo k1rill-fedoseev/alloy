@@ -1,4 +1,5 @@
 use crate::Result;
+use alloy_eips::eip7702::Authorization;
 use alloy_primitives::{eip191_hash_message, Address, ChainId, Signature, B256};
 use async_trait::async_trait;
 use auto_impl::auto_impl;
@@ -57,6 +58,16 @@ pub trait Signer<Sig = Signature> {
     #[inline]
     async fn sign_dynamic_typed_data(&self, payload: &TypedData) -> Result<Sig> {
         self.sign_hash(&payload.eip712_signing_hash()?).await
+    }
+
+    /// Signs an [EIP-7702] authorization.
+    ///
+    /// By default, this calls [`sign_hash`] on the hash of the authorization.
+    ///
+    /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
+    #[inline]
+    async fn sign_eip7702_authorization(&self, authorization: &Authorization) -> Result<Sig> {
+        self.sign_hash(&authorization.signature_hash()).await
     }
 
     /// Returns the signer's Ethereum Address.

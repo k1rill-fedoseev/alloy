@@ -23,6 +23,7 @@ rustdoc-args = [
 workspace = true
 
 [dependencies]
+alloy-eips = { workspace = true }
 alloy-primitives = { workspace = true, features = ["std", "k256"] }
 either.workspace = true
 

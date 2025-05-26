@@ -1,8 +1,9 @@
 //! Ledger Ethereum app wrapper.
 
-use crate::types::{DerivationType, LedgerError, INS, P1, P1_FIRST, P2};
+use crate::types::{DerivationType, LedgerError, INS, P1, P1_FIRST, P1_FIRST_CHUNK, P2};
 use alloy_consensus::SignableTransaction;
-use alloy_primitives::{hex, normalize_v, Address, ChainId, Signature, SignatureError, B256};
+use alloy_eips::eip7702::Authorization;
+use alloy_primitives::{hex, normalize_v, Address, ChainId, Signature, SignatureError, B256, U64};
 use alloy_signer::{sign_transaction_with_chain_id, Result, Signer};
 use async_trait::async_trait;
 use coins_ledger::{
@@ -136,6 +137,36 @@ impl Signer for LedgerSigner {
     #[inline]
     fn set_chain_id(&mut self, chain_id: Option<ChainId>) {
         self.chain_id = chain_id;
+    }
+
+    #[inline]
+    async fn sign_eip7702_authorization(&self, authorization: &Authorization) -> Result<Signature> {
+        let mut payload = Self::path_to_bytes(&self.derivation);
+
+        // TLV encode according to https://github.com/LedgerHQ/app-ethereum/blob/develop/client/src/ledger_app_clients/ethereum/tx_auth_7702.py
+        // and https://github.com/LedgerHQ/app-ethereum/blob/develop/examples/signAuthorizationEIP7702.py
+
+        // 2-byte length of the below - 45 bytes
+        payload.extend_from_slice(&[0x00, 0x2d]);
+
+        // STRUCT_VERSION (1 byte) - 0x01
+        payload.extend_from_slice(&[0x00, 0x01, 0x01]);
+
+        // DELEGATE_ADDR (20 bytes)
+        payload.extend_from_slice(&[0x01, 0x14]);
+        payload.extend_from_slice(authorization.address().as_slice());
+
+        // CHAIN_ID (8 bytes)
+        payload.extend_from_slice(&[0x02, 0x08]);
+        payload.extend_from_slice(&U64::from(authorization.chain_id).to_be_bytes::<8>());
+
+        // NONCE (8 bytes)
+        payload.extend_from_slice(&[0x03, 0x08]);
+        payload.extend_from_slice(&authorization.nonce().to_be_bytes());
+
+        self.sign_payload(INS::SIGN_EIP7702_AUTHORIZATION, &payload)
+            .await
+            .map_err(alloy_signer::Error::other)
     }
 }
 
@@ -286,7 +317,7 @@ impl LedgerSigner {
         let mut command = APDUCommand {
             cla: 0xe0,
             ins: command as u8,
-            p1: P1_FIRST,
+            p1: if command == INS::SIGN_EIP7702_AUTHORIZATION { P1_FIRST_CHUNK } else { P1_FIRST },
             p2: P2::NO_CHAINCODE as u8,
             data: APDUData::new(&[]),
             response_len: None,
@@ -466,5 +497,22 @@ mod tests {
         let addr = ledger.get_address().await.unwrap();
         assert_eq!(addr, my_address());
         assert_eq!(sig.recover_address_from_msg(message.as_bytes()).unwrap(), my_address());
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore]
+    async fn test_sign_eip7702_authorization() {
+        let ledger = init_ledger().await;
+        // authorization to Simple7702Account whitelisted on Ledger
+        let authorization = Authorization {
+            chain_id: U256::from(1),
+            address: address!("4Cd241E8d1510e30b2076397afc7508Ae59C66c9"),
+            nonce: 2,
+        };
+        let sig = ledger.sign_eip7702_authorization(&authorization).await.unwrap();
+        let addr = ledger.get_address().await.unwrap();
+        assert_eq!(addr, my_address());
+        assert_eq!(authorization.into_signed(sig).recover_authority().unwrap(), my_address());
     }
 }
